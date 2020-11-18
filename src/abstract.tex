@@ -1,0 +1,13 @@
+Address space layout randomization (ASLR) is a technique employed to prevent exploitation of memory corruption vulnerabilities in user-space programs. While this technique is widely studied, its kernel space counterpart known as kernel address space layout randomization (KASLR) has received less attention in the research community. KASLR, as it is implemented today is limited in entropy of randomization. Specifically, the kernel image and its modules can only be randomized within a narrow 1GB range. 
+%~\cite{elixir_kernel_range:online}. 
+Moreover, KASLR does not protect against memory disclosure vulnerabilities, the presence of which reduces or completely eliminates the benefits of KASLR.
+
+In this thesis, we make two major contributions.
+First, we add support for position-independent kernel modules to Linux so that the modules can be placed anywhere in the 64-bit virtual address space and at any distance apart from each other.\ssrgContribution~Second, we enable continuous KASLR re-randomization for Linux kernel modules by leveraging the position-independent model.\ssrgEvolution~Both contributions increase the entropy and reduce the chance of successful ROP attacks. Since prior art tackles only user-space programs, we also solve a number of challenges unique to the kernel code.
+
+Our experimental evaluation shows that the overhead of position-independent code is very low. Likewise, the cost of re-randomization is also small even at very high re-randomization frequencies.
+
+\vspace*{\fill}
+This research is based upon work supported by the Office of the Director of National Intelligence (ODNI), Intelligence Advanced Research Projects Activity (IARPA). The views and conclusions contained herein are those of the authors and should not be interpreted as necessarily representing the official policies or endorsements, either expressed or implied, of the ODNI, IARPA, or the U.S. Government. The U.S. Government is authorized to reproduce and distribute reprints for Governmental purposes notwithstanding any copyright annotation thereon.
+
+This research is also based upon work supported by the Office of Naval Research (ONR) under grants N00014-16-1-2104, N00014-16-1-2711, and N00014-18-1-2022.

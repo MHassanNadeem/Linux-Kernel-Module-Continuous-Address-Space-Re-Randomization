@@ -1,0 +1,63 @@
+In this chapter, we present the existing defenses against code reuse attacks. The chapter is divided into three sections, one for each category of defense.
+
+\section{Control Flow Integrity}
+Control-Flow Integrity (CFI) prevents code-reuse attacks by ensuring that the control-flow of a program remains valid. CFI enforces this property by making sure that any indirect branch taken by an application is in accordance with its control flow graph. This is done by comparing the state of the program at run-time with a set of pre-computed valid states. The application is terminated if the flow of the program diverges from expectation. In addition to user-space, CFI mechanisms have also been proposed for kernels.
+KCoFI is one such compiler-based technique ~\cite{Criswell:2014:KCC:2650286.2650804}. Research has shown that CFI can be defeated by a careful selection of gadgets~\cite{evans2015control, davi2014stitching}.
+
+\section{Code Randomization}
+The second category of defenses against code-reuse is code randomization. As previously discussed, ASLR prevents reuse of the code by obscuring the location of the code in memory. Coarse-grained ASLR is currently deployed in all major operating systems~\cite{Wartell:2012:BSS:2382196.2382216, ASLR}. Address space layout randomization has been widely researched and discussed in the literature from early user-space implementations~\cite{PAXASLR,MEMORYEXPLOIT} to OS-specific
+approaches such as fine-grained ASR (address space randomization) in MINIX~\cite{ASRMINIX}. Similarly, (32-bit) KASLR, which randomizes the location of the kernel and its modules at boot time is being used in Linux today~\cite{KASLRLINUX}.
+
+Although not in wide-spread use, many fine-grained randomization schemes have also been proposed that randomize at the function, basic block or the instruction level. However, both coarse-grained and fine-grained ASLR have been defeated by JIT-ROP~\cite{JITROP}. JIT-ROP discovers code at the run time by recursively reading code pages starting with a leaked code pointer and finding other pointers. It has been concluded that no load-time randomization can protect against JIT-ROP~\cite{JITROP}. Despite being defeated, ASLR is still a promising technique that works well given enough entropy of randomization and absence of memory disclosure vulnerabilities.
+
+
+\section{Code Re-Randomization}
+Continuous re\hyp{}randomization was previously proposed and used in various contexts.
+Stabilizer~\cite{STABILIZER} uses re\hyp{}randomization to enhance performance evaluation in user space.
+Fine-grained ASR for MINIX~\cite{ASRMINIX} is an early implementation of
+re\hyp{}randomization for MINIX OS~\cite{MINIX}, a modular microkernel-based operating system.
+Shuffler~\cite{SHUFFLER} is a user-space technique for continuous re\hyp{}randomization to protect against JIT ROP attacks.
+Although we solve the same problem in kernel space that Shuffler solves in user space, Shuffler's goals are somewhat different from ours: it relies on the binary transformation of user-space programs,
+whereas we propose a technique that benefits from Linux source code availability
+as well as from the position-independent model as used by our modules.
+
+There also exist (user-space) techniques that rely on compiler support. Remix~\cite{REMIX}
+extends the LLVM compiler to add extra nop paddings, allowing runtime flexibility
+for moving code inside functions. This way gadget locations change. However, attackers
+can still use function pointers to defeat this re\hyp{}randomization scheme.
+TASR~\cite{TASR} is another system based on the assumption that re\hyp{}randomization in the
+program should happen before input and output (between corresponding system calls).
+TASR is only suitable for user-space programs and has a very high overhead.
+
+Other techniques aim to enhance OS security by other means. NICKLE~\cite{KERNELROOTKITS}
+uses virtual machines to run kernel code in shadow regions. The kernel code can be transparently
+executed in virtual machine in runtime. Similar techniques also used by HookSafe~\cite{HOOKSAFE}
+and hvmHarvard~\cite{HVMHARVARD}.
+Other techniques such as~\cite{KERNELCONTROLDATA} rely on
+special compiler support to protect kernel control data.
+Unfortunately, none of these techniques provide an exhaustive solution to security
+problems that modern OSes have to deal with.
+
+Our work also differs from existing approaches in its focus on large-scale, monolithic OS
+kernels such as Linux which use a low-level programming model and have many inter-connected
+components that do not have strict boundaries and are not well isolated from each other.
+We also provide a comprehensive solution that can be adapted to a wide range of kernel modules.
+
+% \section{Comparison with Shuffler}
+User-space continuous re\hyp{}randomization was previously studied in Shuffler~\cite{SHUFFLER}. Although Shuffler's goals are partially aligned with ours, the objectives and challenges in both cases are not identical. Shuffler is only intended for user-space programs and does not
+handle low-level code such as system calls, interrupt handlers, etc.
+
+
+In-kernel code is also often written to be agnostic to threads that use it: function calls can go all the way from system calls initiated by different user programs and threads. Moreover, Shuffler benefits
+from already existent rich support for position-independent code in user space. Challenges of implementing randomization and re\hyp{}randomization in OS environments were previously pointed out in~\cite{ASRMINIX}, an early attempt to solve a similar problem for more componentized microkernel-based
+OS designs such as MINIX~\cite{MINIX}.
+
+We also take a different approach to performing re\hyp{}randomization. While
+Shuffler performs binary rewriting of existing binaries, we
+do not use binary-level transformation. Due to source code availability
+of the kernel and most of its modules, it makes more sense to
+have a solution that requires a relatively small number of changes while
+benefiting from source code access. Shuffler also has certain
+limitations such as requiring an executable and all required libraries
+to be within $\pm 2$GB reach from each other, effectively transforming
+dynamically-linked applications to more monolithic, statically-linked binaries.

@@ -1,0 +1,73 @@
+The importance of implementing position-independent code model for Linux kernel modules was discussed in Section~\ref{sec:bg:aslr}. In this chapter, we discuss our methodology of generating GOT and PLT in order to support the PIC model for the kernel modules.
+
+\section{Design}
+A shared library comprises of multiple files of source code. In a typical compilation process, each source code file (.c file) is first compiled into an |object file| (.o file) and finally all the object files are linked together to form a |shared object| (.so file). An object file is an intermediate file that is not fully linked, it contains relocation entries and metadata to facilitate further linking. A shared library, on the other hand, is produced further in the linking process; it is largely relocated and has fully generated GOTs and PLTs.
+
+In our implementation, we chose to load kernel modules as object files rather than shared object files. Since an object file contains relocations and meta-data for further linking, they are easier to work with. With the flexibility provided by an object file, we design our own implementations of PLTs (Section~\ref{plt_generation}) and GOTs (Section~\ref{sec:pic:got}) which are highly optimized and suitable for re-randomization.
+
+PLT stubs are typically used in position-independent code to facilitate function interposition and lazy binding for shared libraries and have no direct use in the kernel. However, we found that the Spectre-V2 mitigation (in the presence of PIC) creates code bloat as corresponding retpoline-based calls use longer sequences of instructions, clobber registers, etc. To support retpoline more efficiently, we enable PLT stubs on Spectre-vulnerable machines when retpoline is enabled.
+
+Depending on whether the target CPU has the Spectre-V2 mitigation enabled or not, we apply appropriate optimizations, discussed in Section~\ref{sec:pic:optimization}, to patch the code in order to minimize the need of PLT entries. After the PLTs/GOTs are generated and necessary optimizations are applied, we change the permissions of the pages to read-only to protect the memory from being exploited by an attacker.
+
+
+\section{Optimizations}
+\label{sec:pic:optimization}
+\subsubsection*{PLT Optimizations}
+As previously discussed, the retpoline mitigation causes significant differences in the code generated at the function call sites. We optimize our implementation of PIC for both of these cases -- when retpoline is enabled and when it is disabled.
+
+When the kernel is configured with retpoline disabled, we compile the module with the \verb|no-plt| gcc flag. This causes gcc to avoid PLT. Instead of jumping to a PLT stub, the code gets the callee address from the GOT and indirectly branches to it.
+Given the size of the module does not exceed 2GB, all the local functions and code pointers of the module are guaranteed to be within the range of $\pm 2$GB from the call site. In this case, indirect branches to 64-bit absolute addresses through GOT can be replaced with 32-bit PC relative direct branches. Therefore, for all local symbols indirect \verb|call/jmp| instructions are replaced with direct \verb|call/jmp| respectively. This optimization provides two benefits. First, slower indirect branches are replaced with faster direct branches.\footnote{Indirect branches are slower because they involve an extra indirection. The CPU has to read (data) memory to calculate the target address.} Second, it avoids the need for retpoline safe indirect jumps on processors vulnerable to the Spectre-V2 attack. Since direct \verb|call/jmp| instructions are 1 byte shorter than their indirect counterparts, they are padded with \verb|nop|:
+\begin{verbatim}
+    call *foo@GOTPCREL(%rip) --> call foo; nop
+    jmp *foo@GOTPCREL(%rip)  --> jmp foo; nop
+\end{verbatim}
+
+Conversely, if the kernel is configured with retpoline enabled, we do not set the |no-plt| flag and the generated code makes branches though PLT. The PLT stubs are specially generated for safe indirect jumps that mitigate Spectre-V2 attacks. These stubs can be very expensive, so we eliminate PLT stubs for local symbols by replacing 32-bit PC relative calls to PLT stubs with 32-bit PC relative calls straight to the relevant symbols as follows:
+\begin{verbatim}
+    call foo@PLT --> call foo
+    jmp foo@PLT --> jmp foo
+\end{verbatim}
+
+\subsubsection*{GOT Optimizations}
+Similar to the optimizations made to the local function calls, local variable accesses are also optimized. When modules are compiled with PIC, compiler-generated code retrieves the address of all variables through GOT by default. Considering the small size of the kernel modules, all the local variables are guaranteed to be within $\pm 2$ GB range of the access site and can be referenced directly without going through GOT. We patch all accesses to the local variables as follows:
+\begin{verbatim}
+    mov foo@GOTPCREL(%rip), %reg --> lea foo(%rip), %reg
+\end{verbatim}
+
+All of the aforementioned optimizations not only provide immediate performance benefits by cutting down unnecessary indirections, they also help in reducing the number of GOT and PLT entries. Optimizations applied to local symbols substantially reduce the number of GOT entries for local symbols. Smaller GOT and PLT tables save memory and reduce the risk of leaking absolute variable addresses to an attacker. Moreover, having small GOTs is important for fast re-randomization. During re-randomization, when the code is moved to a new memory location, the GOT needs to be updated accordingly. Since most of the GOT entries are eliminated with our optimizations, a substantially smaller number of GOT entries needs to be updated, resulting in low re-randomization overhead.
+
+\section{GOT Generation}
+\label{sec:pic:got}
+As previously discussed, compilers do not generate GOT for relocatable *.o object files. Since our implementation relies on GOTs, we create our own tables at module load time. Empty (i.e., 0-byte) sections for GOT are added to the object file at link-time using a custom linker script. These empty sections are then inflated to appropriate sizes by traversing over the relocation tables and counting the number of required GOT entries. Finally, the GOT is lazily populated when a relevant relocation type is encountered while the relocations are being applied. The algorithm for generating GOT is discussed in detail below.
+
+Every symbol that has a relocation entry with any of the following relocation types requires a GOT entry:
+\begin{verbatim}
+R_X86_64_REX_GOTPCRELX
+R_X86_64_GOTPCRELX
+R_X86_64_GOTPCREL
+R_X86_64_PLT32
+\end{verbatim}
+Each symbol is typically referenced by multiple relocation entries but requires only one GOT entry. Our solution to this problem is to sort the relocation table with respect to two keys, namely |relocation type| and |symbol|. We use Linux's (in place) heapsort function with a custom comparator for this purpose. The comparator first compares the relocation type and then the symbol. Sorting this way brings together all the relocation entries that refer to the same symbol. This method is not perfect since an object file may contain multiple relocation tables. These relocation tables are not consecutive in memory and can not be sorted together. In cases where the object file contains multiple relocation tables that have relocation entries referring to a common symbol, this algorithm would generate some duplicates. The only drawback of having duplicate GOT entries is wasted memory. An alternative to sorting would be to use a hashmap to weed out the duplicates. A hashmap requires O(number of symbols) memory. Our experiments showed that with our implementation less than 4\% of the GOT entries are duplicates. Given the simplicity of this implementation and a relatively small number of duplicates, this algorithm is found to be a good compromise.
+
+After the size of GOT is determined by counting the number of unique symbols that require a GOT entry, it is time to populate the table. While relocations are applied, whenever a \verb|GOT| relocation type is encountered, a new entry is written into the GOT. The GOT entry contains the 64-bit absolute address of the corresponding symbol.
+
+\section{PLT Generation} \label{plt_generation}
+Similar to the generation of GOT, PLT generation also involves adding an empty section to the object file, inflating the section by counting the number of required PLT entries and lazily creating the entries when a relevant relocation entry is encountered at load time.
+
+The number of required PLTs is calculated by counting the number of unique symbols referred to by the \verb|R_X86_64_PLT32| relocation type. Here, again, sorted relocation tables are used to filter out the duplicates. And just like with GOT, some duplicate PLT entries may be generated. Duplicate PLTs have the undesirable effect of wasting memory but they do not affect the correctness of the module. Through our experiments, it was found that \textasciitilde3\% of the PLT entries are duplicated.
+
+While applying relocations, whenever a relocation of the \verb|R_X86_64_PLT32| type is found, a new PLT entry is generated. For each generated PLT, a new GOT entry is also created. The GOT entry contains the absolute address of the symbol referenced by the relocation entry. The PLT entry depends on the Linux configuration. If retpoline is enabled, the function address is loaded into the \verb|%rax| register from the GOT entry and a safe jump is made to \verb|%rax|.\footnote{According to the x86-64 ABI, \textsc{\%rax} is a temporary register which is not preserved across function calls. This essentially means that \textsc{\%rax} could be clobbered without backup. Even though Linux occasionally uses non-standard calling conventions, \textsc{\%rax} seemed the safest choice for a temporary register here. A few non-standard \textsc{\%rax} uses are handled separately.} Linux's \verb|JMP_NOSPEC| macro is used for the safe jump; this macro takes care of determining if the CPU is affected by the Spectre-V2 bug and generates safe and optimized code. Listing~\ref{lst:plt_retpoline} shows the generated PLT stub when the kennel is compiled with retpoline enabled.
+
+\lstset{language=C}
+\begin{lstlisting}[frame=single, caption={PLT Stub when Retpoline is Enabled},label={lst:plt_retpoline}]
+movq foo@GOTPCREL(%rip), %rax
+JMP_NOSPEC %rax
+\end{lstlisting}
+
+\pagebreak
+Conversely, if the kernel is configured with retpoline disabled, the generated PLT stub is simply an indirect jump to the appropriate function as shown in Listing~\ref{lst:plt_no_retpoline}.
+
+\lstset{language=C}
+\begin{lstlisting}[frame=single, caption={PLT Stub when Retpoline is Disabled},label={lst:plt_no_retpoline}]
+jmpq    *foo@GOTPCREL(%rip)
+\end{lstlisting}

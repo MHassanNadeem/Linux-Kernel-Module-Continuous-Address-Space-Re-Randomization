@@ -1,0 +1,14 @@
+Address space layout randomization (ASLR) is a computer security technique used to prevent attacks that exploit memory disclosure and corruption vulnerabilities. ASLR works by randomly arranging the locations of key areas of a process such as the stack, heap, shared libraries and base address of the executable in the address space. This prevents an attacker from jumping to vulnerable code in memory and thus making it hard to launch control flow hijacking and code reuse attacks. ASLR makes it impossible for the attacker to leverage return-oriented programming (ROP) by pre-computing the location of code gadgets. Unfortunately, ASLR can be defeated by using memory disclosure vulnerabilities to unravel static randomization in an attack known as Just-In-Time ROP (JIT-ROP) attack.
+
+There exist techniques that extend the idea of ASLR by continually re-randomizing the program at run-time. With re-randomization, any leaked memory location is quickly obsoleted by rapidly and continuously rearranging memory. If the period of re-randomization is kept shorter than the time it takes for an attacker to create and launch their attack, then JIT-ROP attacks can be prevented.
+
+Unfortunately, there exists no continuous re-randomization implementation for the Linux kernel. To make matters worse, the ASLR implementation for the Linux kernel (KASLR) is limited. Specifically, for x86-64 CPUs, due to architectural restrictions, the Linux kernel is loaded in a narrow 1GB region of the memory.
+%~\cite{elixir_kernel_range:online}. 
+Likewise, all the kernel modules are loaded within the 1GB range of the kernel image.
+%~\cite{elixir_kernel_range:online}. 
+Due to this relatively low entropy, the Linux kernel is vulnerable to brute-force ROP attacks.
+
+In this thesis, we make two major contributions.
+First, we add support for position-independent kernel modules to Linux so that the modules can be placed anywhere in the 64-bit virtual address space and at any distance apart from each other.\ssrgContribution~Second, we enable continuous KASLR re-randomization for Linux kernel modules by leveraging the position-independent model.\ssrgEvolution~Both contributions increase the entropy and reduce the chance of successful ROP attacks. Since prior art tackles only user-space programs, we also solve a number of challenges unique to the kernel code.
+
+We demonstrate the mechanism and the generality of our proposed re-randomization technique using several different, widely used device drivers, compiled as re-randomizable modules. Our experimental evaluation shows that the overhead of position-independent code is very low. Likewise, the cost of re-randomization is also small even at very high re-randomization frequencies.
